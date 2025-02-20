@@ -34,14 +34,11 @@
 
           socket.onmessage = async (event) => {
             const message = JSON.parse(event.data);
-            if (message.answer) {
-              await peerConnection.setRemoteDescription(
-                new RTCSessionDescription(message.answer)
-              );
-            } else if (message.iceCandidate) {
-              await peerConnection.addIceCandidate(
-                new RTCIceCandidate(message.iceCandidate)
-              );
+            if (message.requestOffer) {
+              console.log("📩 Отримано запит на offer від глядача");
+              const offer = await peerConnection.createOffer();
+              await peerConnection.setLocalDescription(offer);
+              socket.send(JSON.stringify({ offer }));
             }
           };
 
