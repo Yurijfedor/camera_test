@@ -3,56 +3,124 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Камера</title>
+    <title>Камера (Broadcaster)</title>
   </head>
   <body>
     <video id="localVideo" autoplay playsinline></video>
     <script>
       const startStream = async () => {
+        let socket;
+        let peerConnection;
+
         try {
+          // Отримуємо медіапотік
           const stream = await navigator.mediaDevices.getUserMedia({
             video: true,
             audio: false,
           });
-          document.getElementById("localVideo").srcObject = stream;
+          const videoElement = document.getElementById("localVideo");
+          videoElement.srcObject = stream;
+          console.log("✅ Відео з камери отримано");
 
-          // Надсилаємо відео в WebRTC
-          const peerConnection = new RTCPeerConnection({
+          // Ініціалізація WebRTC
+          peerConnection = new RTCPeerConnection({
             iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
           });
           stream
             .getTracks()
             .forEach((track) => peerConnection.addTrack(track, stream));
+          console.log("🎥 Треки додані до PeerConnection");
 
-          // Відправляємо SDP-дані через WebSocket
-          const socket = new WebSocket("wss://192.168.0.103:8080");
+          // Ініціалізація WebSocket
+          socket = new WebSocket("wss://192.168.0.103:8080");
+
           socket.onopen = async () => {
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            socket.send(JSON.stringify({ offer }));
+            console.log("✅ WebSocket підключено");
+            // Повідомляємо сервер, що ми broadcaster
+            socket.send(JSON.stringify({ role: "broadcaster" }));
+
+            // Створюємо і надсилаємо offer
+            try {
+              const offer = await peerConnection.createOffer();
+              await peerConnection.setLocalDescription(offer);
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ offer }));
+                console.log("🎥 Надіслано offer:", offer);
+              } else {
+                console.warn("⚠️ WebSocket не відкритий для надсилання offer");
+              }
+            } catch (error) {
+              console.error("❌ Помилка при створенні offer:", error);
+            }
           };
 
           socket.onmessage = async (event) => {
-            const message = JSON.parse(event.data);
-            if (message.answer) {
-              await peerConnection.setRemoteDescription(
-                new RTCSessionDescription(message.answer)
-              );
-            } else if (message.iceCandidate) {
-              await peerConnection.addIceCandidate(
-                new RTCIceCandidate(message.iceCandidate)
-              );
+            try {
+              const message = JSON.parse(event.data);
+              console.log("📩 Отримано повідомлення:", message);
+
+              if (message.answer) {
+                await peerConnection.setRemoteDescription(
+                  new RTCSessionDescription(message.answer)
+                );
+                console.log("✅ Отримано і встановлено answer");
+              } else if (message.iceCandidate) {
+                await peerConnection.addIceCandidate(
+                  new RTCIceCandidate(message.iceCandidate)
+                );
+                console.log("🧊 Додано ICE candidate:", message.iceCandidate);
+              }
+            } catch (error) {
+              console.error("❌ Помилка при обробці повідомлення:", error);
             }
+          };
+
+          socket.onerror = (error) => {
+            console.error("❌ Помилка WebSocket:", error);
+          };
+
+          socket.onclose = () => {
+            console.log("⚠️ WebSocket закрито");
           };
 
           peerConnection.onicecandidate = (event) => {
             if (event.candidate) {
-              socket.send(JSON.stringify({ iceCandidate: event.candidate }));
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ iceCandidate: event.candidate }));
+                console.log("🧊 Надіслано ICE candidate:", event.candidate);
+              } else {
+                console.warn(
+                  "⚠️ WebSocket не відкритий для надсилання ICE candidate"
+                );
+              }
             }
           };
+
+          peerConnection.oniceconnectionstatechange = () => {
+            console.log(
+              "🧊 ICE Connection State:",
+              peerConnection.iceConnectionState
+            );
+          };
         } catch (error) {
-          console.error("Помилка доступу до камери:", error);
+          console.error("❌ Помилка доступу до камери або WebRTC:", error);
         }
+
+        // Очищення при закритті сторінки
+        window.onunload = () => {
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.close();
+            console.log("🛑 WebSocket закрито при виході");
+          }
+          if (peerConnection) {
+            peerConnection.close();
+            console.log("🛑 PeerConnection закрито при виході");
+          }
+          if (stream) {
+            stream.getTracks().forEach((track) => track.stop());
+            console.log("🛑 Медіапотік зупинено");
+          }
+        };
       };
 
       startStream();
