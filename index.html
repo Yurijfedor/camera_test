@@ -11,6 +11,7 @@
       const startStream = async () => {
         let socket;
         let peerConnection;
+        const iceCandidateQueue = []; // Черга для ICE кандидатів
 
         try {
           // Отримуємо медіапотік
@@ -36,18 +37,14 @@
 
           socket.onopen = async () => {
             console.log("✅ WebSocket підключено");
-            // Повідомляємо сервер, що ми broadcaster
             socket.send(JSON.stringify({ role: "broadcaster" }));
 
-            // Створюємо і надсилаємо offer
             try {
               const offer = await peerConnection.createOffer();
               await peerConnection.setLocalDescription(offer);
               if (socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({ offer }));
                 console.log("🎥 Надіслано offer:", offer);
-              } else {
-                console.warn("⚠️ WebSocket не відкритий для надсилання offer");
               }
             } catch (error) {
               console.error("❌ Помилка при створенні offer:", error);
@@ -59,16 +56,36 @@
               const message = JSON.parse(event.data);
               console.log("📩 Отримано повідомлення:", message);
 
-              if (message.answer) {
+              if (message.offer) {
+                console.warn("⚠️ Отримано неочікуваний offer, ігноруємо");
+                return; // Broadcaster не повинен обробляти offer
+              } else if (message.answer) {
                 await peerConnection.setRemoteDescription(
                   new RTCSessionDescription(message.answer)
                 );
                 console.log("✅ Отримано і встановлено answer");
+
+                // Обробка ICE кандидатів із черги
+                while (iceCandidateQueue.length) {
+                  const candidate = iceCandidateQueue.shift();
+                  await peerConnection.addIceCandidate(
+                    new RTCIceCandidate(candidate)
+                  );
+                  console.log("🧊 Додано ICE candidate з черги:", candidate);
+                }
               } else if (message.iceCandidate) {
-                await peerConnection.addIceCandidate(
-                  new RTCIceCandidate(message.iceCandidate)
-                );
-                console.log("🧊 Додано ICE candidate:", message.iceCandidate);
+                if (peerConnection.remoteDescription) {
+                  await peerConnection.addIceCandidate(
+                    new RTCIceCandidate(message.iceCandidate)
+                  );
+                  console.log("🧊 Додано ICE candidate:", message.iceCandidate);
+                } else {
+                  iceCandidateQueue.push(message.iceCandidate);
+                  console.log(
+                    "🧊 ICE candidate додано в чергу:",
+                    message.iceCandidate
+                  );
+                }
               }
             } catch (error) {
               console.error("❌ Помилка при обробці повідомлення:", error);
@@ -88,10 +105,6 @@
               if (socket.readyState === WebSocket.OPEN) {
                 socket.send(JSON.stringify({ iceCandidate: event.candidate }));
                 console.log("🧊 Надіслано ICE candidate:", event.candidate);
-              } else {
-                console.warn(
-                  "⚠️ WebSocket не відкритий для надсилання ICE candidate"
-                );
               }
             }
           };
@@ -106,20 +119,11 @@
           console.error("❌ Помилка доступу до камери або WebRTC:", error);
         }
 
-        // Очищення при закритті сторінки
         window.onunload = () => {
-          if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.close();
-            console.log("🛑 WebSocket закрито при виході");
-          }
-          if (peerConnection) {
-            peerConnection.close();
-            console.log("🛑 PeerConnection закрито при виході");
-          }
-          if (stream) {
-            stream.getTracks().forEach((track) => track.stop());
-            console.log("🛑 Медіапотік зупинено");
-          }
+          if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+          if (peerConnection) peerConnection.close();
+          if (stream) stream.getTracks().forEach((track) => track.stop());
+          console.log("🛑 Ресурси очищено");
         };
       };
 
