@@ -11,11 +11,13 @@
       const startStream = async () => {
         let socket;
         let peerConnection;
-        const iceCandidateQueue = []; // Черга для ICE кандидатів
+        let stream;
+        const iceCandidateQueue = [];
+        let offerInterval;
 
         try {
           // Отримуємо медіапотік
-          const stream = await navigator.mediaDevices.getUserMedia({
+          stream = await navigator.mediaDevices.getUserMedia({
             video: true,
             audio: false,
           });
@@ -35,10 +37,7 @@
           // Ініціалізація WebSocket
           socket = new WebSocket("wss://192.168.0.103:8080");
 
-          socket.onopen = async () => {
-            console.log("✅ WebSocket підключено");
-            socket.send(JSON.stringify({ role: "broadcaster" }));
-
+          const sendOffer = async () => {
             try {
               const offer = await peerConnection.createOffer();
               await peerConnection.setLocalDescription(offer);
@@ -51,6 +50,25 @@
             }
           };
 
+          socket.onopen = async () => {
+            console.log("✅ WebSocket підключено");
+            socket.send(JSON.stringify({ role: "broadcaster" }));
+            await sendOffer();
+
+            // Повторюємо offer кожні 5 секунд, якщо з'єднання не встановлено
+            offerInterval = setInterval(() => {
+              if (
+                peerConnection.iceConnectionState !== "connected" &&
+                peerConnection.iceConnectionState !== "completed"
+              ) {
+                sendOffer();
+              } else {
+                clearInterval(offerInterval);
+                console.log("🛑 Зупинено повтор offer: з'єднання встановлено");
+              }
+            }, 5000);
+          };
+
           socket.onmessage = async (event) => {
             try {
               const message = JSON.parse(event.data);
@@ -58,14 +76,12 @@
 
               if (message.offer) {
                 console.warn("⚠️ Отримано неочікуваний offer, ігноруємо");
-                return; // Broadcaster не повинен обробляти offer
+                return;
               } else if (message.answer) {
                 await peerConnection.setRemoteDescription(
                   new RTCSessionDescription(message.answer)
                 );
                 console.log("✅ Отримано і встановлено answer");
-
-                // Обробка ICE кандидатів із черги
                 while (iceCandidateQueue.length) {
                   const candidate = iceCandidateQueue.shift();
                   await peerConnection.addIceCandidate(
@@ -123,6 +139,7 @@
           if (socket && socket.readyState === WebSocket.OPEN) socket.close();
           if (peerConnection) peerConnection.close();
           if (stream) stream.getTracks().forEach((track) => track.stop());
+          if (offerInterval) clearInterval(offerInterval);
           console.log("🛑 Ресурси очищено");
         };
       };
