@@ -16,7 +16,6 @@
         let offerInterval;
 
         try {
-          // Отримуємо медіапотік
           stream = await navigator.mediaDevices.getUserMedia({
             video: true,
             audio: false,
@@ -25,7 +24,6 @@
           videoElement.srcObject = stream;
           console.log("✅ Відео з камери отримано");
 
-          // Ініціалізація WebRTC
           peerConnection = new RTCPeerConnection({
             iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
           });
@@ -34,7 +32,6 @@
             .forEach((track) => peerConnection.addTrack(track, stream));
           console.log("🎥 Треки додані до PeerConnection");
 
-          // Ініціалізація WebSocket
           socket = new WebSocket("wss://192.168.0.103:8080");
 
           const sendOffer = async () => {
@@ -55,16 +52,17 @@
             socket.send(JSON.stringify({ role: "broadcaster" }));
             await sendOffer();
 
-            // Повторюємо offer кожні 5 секунд, якщо з'єднання не встановлено
+            // Повторюємо offer лише якщо немає remoteDescription
             offerInterval = setInterval(() => {
               if (
+                !peerConnection.remoteDescription &&
                 peerConnection.iceConnectionState !== "connected" &&
                 peerConnection.iceConnectionState !== "completed"
               ) {
                 sendOffer();
-              } else {
+              } else if (peerConnection.remoteDescription) {
                 clearInterval(offerInterval);
-                console.log("🛑 Зупинено повтор offer: з'єднання встановлено");
+                console.log("🛑 Зупинено повтор offer: answer отримано");
               }
             }, 5000);
           };
@@ -78,16 +76,23 @@
                 console.warn("⚠️ Отримано неочікуваний offer, ігноруємо");
                 return;
               } else if (message.answer) {
-                await peerConnection.setRemoteDescription(
-                  new RTCSessionDescription(message.answer)
-                );
-                console.log("✅ Отримано і встановлено answer");
-                while (iceCandidateQueue.length) {
-                  const candidate = iceCandidateQueue.shift();
-                  await peerConnection.addIceCandidate(
-                    new RTCIceCandidate(candidate)
+                if (peerConnection.signalingState === "have-local-offer") {
+                  await peerConnection.setRemoteDescription(
+                    new RTCSessionDescription(message.answer)
                   );
-                  console.log("🧊 Додано ICE candidate з черги:", candidate);
+                  console.log("✅ Отримано і встановлено answer");
+                  while (iceCandidateQueue.length) {
+                    const candidate = iceCandidateQueue.shift();
+                    await peerConnection.addIceCandidate(
+                      new RTCIceCandidate(candidate)
+                    );
+                    console.log("🧊 Додано ICE candidate з черги:", candidate);
+                  }
+                } else {
+                  console.warn(
+                    "⚠️ Answer отримано в неправильному стані:",
+                    peerConnection.signalingState
+                  );
                 }
               } else if (message.iceCandidate) {
                 if (peerConnection.remoteDescription) {
