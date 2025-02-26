@@ -20,12 +20,19 @@
             video: true,
             audio: false,
           });
+          console.log("✅ Відео з камери отримано");
           const videoElement = document.getElementById("localVideo");
           videoElement.srcObject = stream;
-          console.log("✅ Відео з камери отримано");
 
           peerConnection = new RTCPeerConnection({
-            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+            iceServers: [
+              { urls: "stun:stun.l.google.com:19302" },
+              {
+                urls: "turn:openrelay.metered.ca:80",
+                username: "openrelayproject",
+                credential: "openrelayproject",
+              },
+            ],
           });
           stream
             .getTracks()
@@ -92,9 +99,8 @@
                   }
                 } else if (signalingState === "stable") {
                   console.warn(
-                    "⚠️ Answer отримано в стані stable, перезапускаємо сигналізацію"
+                    "⚠️ Answer отримано в стані stable, перезапускаємо"
                   );
-                  // Перезапускаємо сигналізацію
                   await sendOffer();
                 }
               } else if (message.iceCandidate) {
