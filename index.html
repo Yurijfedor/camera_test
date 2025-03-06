@@ -39,7 +39,7 @@
             .forEach((track) => peerConnection.addTrack(track, stream));
           console.log("🎥 Треки додані до PeerConnection");
 
-          socket = new WebSocket("wss://192.168.0.103:8080");
+          socket = new WebSocket("wss://stream.farmersure.pp.ua:8080");
 
           const sendOffer = async () => {
             try {
