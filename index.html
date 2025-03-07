@@ -19,9 +19,8 @@
 
       let socket;
       let stream;
-      const peerConnections = new Map(); // Map для зберігання viewerId -> RTCPeerConnection
-      const iceCandidateQueues = new Map(); // Map для черг ICE кандидатів
-      let offerIntervals = new Map(); // Map для інтервалів offer
+      const peerConnections = new Map();
+      const iceCandidateQueues = new Map();
 
       const startStream = async () => {
         try {
@@ -37,7 +36,7 @@
           videoElement.srcObject = stream;
 
           if (socket && socket.readyState === WebSocket.OPEN) socket.close();
-          socket = new WebSocket("wss://e85c-91-218-88-220.ngrok-free.app");
+          socket = new WebSocket("wss://3f69-91-218-88-220.ngrok-free.app");
 
           socket.onopen = () => {
             console.log("✅ WebSocket підключено");
@@ -51,6 +50,8 @@
 
               if (message.newViewer) {
                 const viewerId = message.newViewer;
+                if (peerConnections.has(viewerId)) return; // Уникаємо дублювання
+
                 const pc = new RTCPeerConnection({
                   iceServers: [
                     { urls: "stun:stun.l.google.com:19302" },
@@ -79,10 +80,7 @@
                         viewerId,
                       })
                     );
-                    console.log(
-                      `🧊 Надіслано ICE candidate для ${viewerId}:`,
-                      event.candidate
-                    );
+                    console.log(`🧊 Надіслано ICE candidate для ${viewerId}`);
                   }
                 };
 
@@ -91,43 +89,22 @@
                     `🧊 ICE Connection State для ${viewerId}:`,
                     pc.iceConnectionState
                   );
-                  if (pc.iceConnectionState === "disconnected") {
+                  if (
+                    pc.iceConnectionState === "disconnected" ||
+                    pc.iceConnectionState === "failed"
+                  ) {
                     console.warn(`⚠️ З’єднання з ${viewerId} розірвано`);
+                    peerConnections.delete(viewerId);
+                    iceCandidateQueues.delete(viewerId);
                   }
                 };
 
-                const sendOffer = async () => {
-                  try {
-                    const offer = await pc.createOffer();
-                    await pc.setLocalDescription(offer);
-                    if (socket.readyState === WebSocket.OPEN) {
-                      socket.send(JSON.stringify({ offer, viewerId }));
-                      console.log(`🎥 Надіслано offer для ${viewerId}:`, offer);
-                    }
-                  } catch (error) {
-                    console.error(
-                      `❌ Помилка при створенні offer для ${viewerId}:`,
-                      error
-                    );
-                  }
-                };
-
-                await sendOffer();
-                offerIntervals.set(
-                  viewerId,
-                  setInterval(() => {
-                    if (
-                      !pc.remoteDescription &&
-                      pc.iceConnectionState !== "connected" &&
-                      pc.iceConnectionState !== "completed"
-                    ) {
-                      sendOffer();
-                    } else if (pc.remoteDescription) {
-                      clearInterval(offerIntervals.get(viewerId));
-                      console.log(`🛑 Зупинено повтор offer для ${viewerId}`);
-                    }
-                  }, 5000)
-                );
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+                if (socket.readyState === WebSocket.OPEN) {
+                  socket.send(JSON.stringify({ offer, viewerId }));
+                  console.log(`🎥 Надіслано offer для ${viewerId}`);
+                }
               } else if (message.answer && message.viewerId) {
                 const pc = peerConnections.get(message.viewerId);
                 if (pc && pc.signalingState === "have-local-offer") {
@@ -171,18 +148,12 @@
                 if (pc) pc.close();
                 peerConnections.delete(viewerId);
                 iceCandidateQueues.delete(viewerId);
-                if (offerIntervals.get(viewerId)) {
-                  clearInterval(offerIntervals.get(viewerId));
-                  offerIntervals.delete(viewerId);
-                }
                 console.log(`🗑️ Видалено з’єднання для глядача ${viewerId}`);
               } else if (message.restart) {
                 console.log("🔄 Отримано команду перезапуску");
                 peerConnections.forEach((pc) => pc.close());
                 peerConnections.clear();
                 iceCandidateQueues.clear();
-                offerIntervals.forEach((interval) => clearInterval(interval));
-                offerIntervals.clear();
                 await startStream();
               }
             } catch (error) {
@@ -208,7 +179,6 @@
         if (socket && socket.readyState === WebSocket.OPEN) socket.close();
         peerConnections.forEach((pc) => pc.close());
         if (stream) stream.getTracks().forEach((track) => track.stop());
-        offerIntervals.forEach((interval) => clearInterval(interval));
         console.log("🛑 Ресурси очищено");
       };
     </script>
