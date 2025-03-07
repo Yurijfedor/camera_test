@@ -18,10 +18,10 @@
       };
 
       let socket;
-      let peerConnection;
       let stream;
-      let iceCandidateQueue = [];
-      let offerInterval;
+      const peerConnections = new Map(); // Map для зберігання viewerId -> RTCPeerConnection
+      const iceCandidateQueues = new Map(); // Map для черг ICE кандидатів
+      let offerIntervals = new Map(); // Map для інтервалів offer
 
       const startStream = async () => {
         try {
@@ -36,56 +36,12 @@
           const videoElement = document.getElementById("localVideo");
           videoElement.srcObject = stream;
 
-          if (peerConnection) peerConnection.close();
-          peerConnection = new RTCPeerConnection({
-            iceServers: [
-              { urls: "stun:stun.l.google.com:19302" },
-              {
-                urls: "turn:openrelay.metered.ca:80",
-                username: "openrelayproject",
-                credential: "openrelayproject",
-              },
-            ],
-          });
-          stream
-            .getTracks()
-            .forEach((track) => peerConnection.addTrack(track, stream));
-          console.log("🎥 Треки додані до PeerConnection");
-
           if (socket && socket.readyState === WebSocket.OPEN) socket.close();
           socket = new WebSocket("wss://9078-91-218-88-220.ngrok-free.app");
 
-          const sendOffer = async () => {
-            try {
-              const offer = await peerConnection.createOffer();
-              await peerConnection.setLocalDescription(offer);
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ offer }));
-                console.log("🎥 Надіслано offer:", offer);
-              }
-            } catch (error) {
-              console.error("❌ Помилка при створенні offer:", error);
-            }
-          };
-
-          socket.onopen = async () => {
+          socket.onopen = () => {
             console.log("✅ WebSocket підключено");
             socket.send(JSON.stringify({ role: "broadcaster" }));
-            await sendOffer();
-
-            if (offerInterval) clearInterval(offerInterval);
-            offerInterval = setInterval(() => {
-              if (
-                !peerConnection.remoteDescription &&
-                peerConnection.iceConnectionState !== "connected" &&
-                peerConnection.iceConnectionState !== "completed"
-              ) {
-                sendOffer();
-              } else if (peerConnection.remoteDescription) {
-                clearInterval(offerInterval);
-                console.log("🛑 Зупинено повтор offer: answer отримано");
-              }
-            }, 5000);
           };
 
           socket.onmessage = async (event) => {
@@ -93,53 +49,141 @@
               const message = JSON.parse(event.data);
               console.log("📩 Отримано повідомлення:", message);
 
-              if (message.restart) {
-                // Нова команда перезапуску
-                console.log("🔄 Отримано команду перезапуску");
-                if (offerInterval) clearInterval(offerInterval);
-                iceCandidateQueue = [];
-                await startStream(); // Перезапуск
-                return;
-              }
+              if (message.newViewer) {
+                const viewerId = message.newViewer;
+                const pc = new RTCPeerConnection({
+                  iceServers: [
+                    { urls: "stun:stun.l.google.com:19302" },
+                    {
+                      urls: "turn:openrelay.metered.ca:80",
+                      username: "openrelayproject",
+                      credential: "openrelayproject",
+                    },
+                  ],
+                });
+                peerConnections.set(viewerId, pc);
+                iceCandidateQueues.set(viewerId, []);
 
-              if (message.offer) {
-                console.warn("⚠️ Отримано неочікуваний offer, ігноруємо");
-                return;
-              } else if (message.answer) {
-                const signalingState = peerConnection.signalingState;
-                console.log("Текущий стан сигналізації:", signalingState);
+                stream
+                  .getTracks()
+                  .forEach((track) => pc.addTrack(track, stream));
+                console.log(
+                  `🎥 Треки додані до PeerConnection для глядача ${viewerId}`
+                );
 
-                if (signalingState === "have-local-offer") {
-                  await peerConnection.setRemoteDescription(
+                pc.onicecandidate = (event) => {
+                  if (event.candidate && socket.readyState === WebSocket.OPEN) {
+                    socket.send(
+                      JSON.stringify({
+                        iceCandidate: event.candidate,
+                        viewerId,
+                      })
+                    );
+                    console.log(
+                      `🧊 Надіслано ICE candidate для ${viewerId}:`,
+                      event.candidate
+                    );
+                  }
+                };
+
+                pc.oniceconnectionstatechange = () => {
+                  console.log(
+                    `🧊 ICE Connection State для ${viewerId}:`,
+                    pc.iceConnectionState
+                  );
+                  if (pc.iceConnectionState === "disconnected") {
+                    console.warn(`⚠️ З’єднання з ${viewerId} розірвано`);
+                  }
+                };
+
+                const sendOffer = async () => {
+                  try {
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    if (socket.readyState === WebSocket.OPEN) {
+                      socket.send(JSON.stringify({ offer, viewerId }));
+                      console.log(`🎥 Надіслано offer для ${viewerId}:`, offer);
+                    }
+                  } catch (error) {
+                    console.error(
+                      `❌ Помилка при створенні offer для ${viewerId}:`,
+                      error
+                    );
+                  }
+                };
+
+                await sendOffer();
+                offerIntervals.set(
+                  viewerId,
+                  setInterval(() => {
+                    if (
+                      !pc.remoteDescription &&
+                      pc.iceConnectionState !== "connected" &&
+                      pc.iceConnectionState !== "completed"
+                    ) {
+                      sendOffer();
+                    } else if (pc.remoteDescription) {
+                      clearInterval(offerIntervals.get(viewerId));
+                      console.log(`🛑 Зупинено повтор offer для ${viewerId}`);
+                    }
+                  }, 5000)
+                );
+              } else if (message.answer && message.viewerId) {
+                const pc = peerConnections.get(message.viewerId);
+                if (pc && pc.signalingState === "have-local-offer") {
+                  await pc.setRemoteDescription(
                     new RTCSessionDescription(message.answer)
                   );
-                  console.log("✅ Отримано і встановлено answer");
-                  while (iceCandidateQueue.length) {
-                    const candidate = iceCandidateQueue.shift();
-                    await peerConnection.addIceCandidate(
-                      new RTCIceCandidate(candidate)
-                    );
-                    console.log("🧊 Додано ICE candidate з черги:", candidate);
-                  }
-                } else if (signalingState === "stable") {
-                  console.warn(
-                    "⚠️ Answer отримано в стані stable, перезапускаємо"
-                  );
-                  await sendOffer();
-                }
-              } else if (message.iceCandidate) {
-                if (peerConnection.remoteDescription) {
-                  await peerConnection.addIceCandidate(
-                    new RTCIceCandidate(message.iceCandidate)
-                  );
-                  console.log("🧊 Додано ICE candidate:", message.iceCandidate);
-                } else {
-                  iceCandidateQueue.push(message.iceCandidate);
                   console.log(
-                    "🧊 ICE candidate додано в чергу:",
-                    message.iceCandidate
+                    `✅ Отримано і встановлено answer для ${message.viewerId}`
                   );
+                  const queue = iceCandidateQueues.get(message.viewerId);
+                  while (queue.length) {
+                    const candidate = queue.shift();
+                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                    console.log(
+                      `🧊 Додано ICE candidate з черги для ${message.viewerId}`
+                    );
+                  }
                 }
+              } else if (message.iceCandidate && message.viewerId) {
+                const pc = peerConnections.get(message.viewerId);
+                if (pc) {
+                  if (pc.remoteDescription) {
+                    await pc.addIceCandidate(
+                      new RTCIceCandidate(message.iceCandidate)
+                    );
+                    console.log(
+                      `🧊 Додано ICE candidate для ${message.viewerId}`
+                    );
+                  } else {
+                    iceCandidateQueues
+                      .get(message.viewerId)
+                      .push(message.iceCandidate);
+                    console.log(
+                      `🧊 ICE candidate додано в чергу для ${message.viewerId}`
+                    );
+                  }
+                }
+              } else if (message.viewerDisconnected) {
+                const viewerId = message.viewerDisconnected;
+                const pc = peerConnections.get(viewerId);
+                if (pc) pc.close();
+                peerConnections.delete(viewerId);
+                iceCandidateQueues.delete(viewerId);
+                if (offerIntervals.get(viewerId)) {
+                  clearInterval(offerIntervals.get(viewerId));
+                  offerIntervals.delete(viewerId);
+                }
+                console.log(`🗑️ Видалено з’єднання для глядача ${viewerId}`);
+              } else if (message.restart) {
+                console.log("🔄 Отримано команду перезапуску");
+                peerConnections.forEach((pc) => pc.close());
+                peerConnections.clear();
+                iceCandidateQueues.clear();
+                offerIntervals.forEach((interval) => clearInterval(interval));
+                offerIntervals.clear();
+                await startStream();
               }
             } catch (error) {
               console.error("❌ Помилка при обробці повідомлення:", error);
@@ -153,26 +197,6 @@
           socket.onclose = () => {
             console.log("⚠️ WebSocket закрито");
           };
-
-          peerConnection.onicecandidate = (event) => {
-            if (event.candidate) {
-              if (socket.readyState === WebSocket.OPEN) {
-                socket.send(JSON.stringify({ iceCandidate: event.candidate }));
-                console.log("🧊 Надіслано ICE candidate:", event.candidate);
-              }
-            }
-          };
-
-          peerConnection.oniceconnectionstatechange = () => {
-            console.log(
-              "🧊 ICE Connection State:",
-              peerConnection.iceConnectionState
-            );
-            if (peerConnection.iceConnectionState === "disconnected") {
-              console.warn("⚠️ З’єднання розірвано, повторюємо offer");
-              sendOffer();
-            }
-          };
         } catch (error) {
           console.error("❌ Помилка доступу до камери або WebRTC:", error);
         }
@@ -182,9 +206,9 @@
 
       window.onunload = () => {
         if (socket && socket.readyState === WebSocket.OPEN) socket.close();
-        if (peerConnection) peerConnection.close();
+        peerConnections.forEach((pc) => pc.close());
         if (stream) stream.getTracks().forEach((track) => track.stop());
-        if (offerInterval) clearInterval(offerInterval);
+        offerIntervals.forEach((interval) => clearInterval(interval));
         console.log("🛑 Ресурси очищено");
       };
     </script>
