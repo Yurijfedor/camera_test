@@ -41,6 +41,13 @@
           socket.onopen = () => {
             console.log("✅ WebSocket підключено");
             socket.send(JSON.stringify({ role: "broadcaster" }));
+            // "Keep-alive" кожні 30 секунд
+            setInterval(() => {
+              if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ ping: true }));
+                console.log("🏓 Надіслано ping");
+              }
+            }, 30000);
           };
 
           socket.onmessage = async (event) => {
@@ -50,7 +57,7 @@
 
               if (message.newViewer) {
                 const viewerId = message.newViewer;
-                if (peerConnections.has(viewerId)) return; // Уникаємо дублювання
+                if (peerConnections.has(viewerId)) return;
 
                 const pc = new RTCPeerConnection({
                   iceServers: [
@@ -167,6 +174,7 @@
 
           socket.onclose = () => {
             console.log("⚠️ WebSocket закрито");
+            setTimeout(startStream, 2000); // Автоматичний перезапуск через 2 секунди
           };
         } catch (error) {
           console.error("❌ Помилка доступу до камери або WebRTC:", error);
