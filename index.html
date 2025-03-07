@@ -7,15 +7,27 @@
   </head>
   <body>
     <video id="localVideo" autoplay playsinline></video>
+    <textarea id="logOutput" rows="10" cols="50" readonly></textarea>
     <script>
-      const startStream = async () => {
-        let socket;
-        let peerConnection;
-        let stream;
-        const iceCandidateQueue = [];
-        let offerInterval;
+      const logs = [];
+      const originalConsoleLog = console.log;
+      console.log = function (message) {
+        logs.push(message);
+        originalConsoleLog.apply(console, arguments);
+        document.getElementById("logOutput").value = logs.join("\n");
+      };
 
+      let socket;
+      let peerConnection;
+      let stream;
+      let iceCandidateQueue = [];
+      let offerInterval;
+
+      const startStream = async () => {
         try {
+          if (stream) {
+            stream.getTracks().forEach((track) => track.stop());
+          }
           stream = await navigator.mediaDevices.getUserMedia({
             video: true,
             audio: false,
@@ -24,6 +36,7 @@
           const videoElement = document.getElementById("localVideo");
           videoElement.srcObject = stream;
 
+          if (peerConnection) peerConnection.close();
           peerConnection = new RTCPeerConnection({
             iceServers: [
               { urls: "stun:stun.l.google.com:19302" },
@@ -39,6 +52,7 @@
             .forEach((track) => peerConnection.addTrack(track, stream));
           console.log("🎥 Треки додані до PeerConnection");
 
+          if (socket && socket.readyState === WebSocket.OPEN) socket.close();
           socket = new WebSocket("wss://9078-91-218-88-220.ngrok-free.app");
 
           const sendOffer = async () => {
@@ -59,6 +73,7 @@
             socket.send(JSON.stringify({ role: "broadcaster" }));
             await sendOffer();
 
+            if (offerInterval) clearInterval(offerInterval);
             offerInterval = setInterval(() => {
               if (
                 !peerConnection.remoteDescription &&
@@ -77,6 +92,15 @@
             try {
               const message = JSON.parse(event.data);
               console.log("📩 Отримано повідомлення:", message);
+
+              if (message.restart) {
+                // Нова команда перезапуску
+                console.log("🔄 Отримано команду перезапуску");
+                if (offerInterval) clearInterval(offerInterval);
+                iceCandidateQueue = [];
+                await startStream(); // Перезапуск
+                return;
+              }
 
               if (message.offer) {
                 console.warn("⚠️ Отримано неочікуваний offer, ігноруємо");
@@ -152,17 +176,17 @@
         } catch (error) {
           console.error("❌ Помилка доступу до камери або WebRTC:", error);
         }
-
-        window.onunload = () => {
-          if (socket && socket.readyState === WebSocket.OPEN) socket.close();
-          if (peerConnection) peerConnection.close();
-          if (stream) stream.getTracks().forEach((track) => track.stop());
-          if (offerInterval) clearInterval(offerInterval);
-          console.log("🛑 Ресурси очищено");
-        };
       };
 
       startStream();
+
+      window.onunload = () => {
+        if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+        if (peerConnection) peerConnection.close();
+        if (stream) stream.getTracks().forEach((track) => track.stop());
+        if (offerInterval) clearInterval(offerInterval);
+        console.log("🛑 Ресурси очищено");
+      };
     </script>
   </body>
 </html>
