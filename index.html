@@ -4,9 +4,27 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Камера (Broadcaster)</title>
+    <style>
+      #videoContainer {
+        width: 640px; /* Змініть на потрібну ширину відео */
+        height: 480px; /* Змініть на потрібну висоту відео */
+        overflow: hidden; /* Приховуємо зайве */
+        position: relative;
+      }
+      #localVideo {
+        width: 800px; /* Повна ширина захопленого вікна, більша за контейнер */
+        height: 600px; /* Повна висота захопленого вікна, більша за контейнер */
+        object-fit: cover; /* Обрізає відео, зберігаючи пропорції */
+        position: absolute;
+        left: -80px; /* Зсув вліво для обрізки рамок */
+        top: -60px; /* Зсув вгору для обрізки рамок */
+      }
+    </style>
   </head>
   <body>
-    <video id="localVideo" autoplay playsinline muted></video>
+    <div id="videoContainer">
+      <video id="localVideo" autoplay playsinline muted></video>
+    </div>
     <textarea id="logOutput" rows="10" cols="50" readonly></textarea>
     <button onclick="startStream()">Restart Stream</button>
     <script>
@@ -26,21 +44,18 @@
 
       const startStream = async () => {
         try {
-          // Зупиняємо попередній потік, якщо він є
           if (stream) {
             stream.getTracks().forEach((track) => track.stop());
           }
 
-          // Захоплення екрану замість веб-камери
           stream = await navigator.mediaDevices.getDisplayMedia({
             video: true,
-            audio: false, // Додайте audio: true, якщо потрібен звук
+            audio: false,
           });
           console.log("✅ Екран захоплено");
           const videoElement = document.getElementById("localVideo");
           videoElement.srcObject = stream;
 
-          // Закриття попереднього з’єднання
           if (peerConnection) peerConnection.close();
           peerConnection = new RTCPeerConnection({
             iceServers: [
@@ -53,15 +68,13 @@
             ],
           });
 
-          // Додаємо треки до WebRTC
           stream
             .getTracks()
             .forEach((track) => peerConnection.addTrack(track, stream));
           console.log("🎥 Треки додані до PeerConnection");
 
-          // Закриваємо попередній WebSocket, якщо відкритий
           if (socket && socket.readyState === WebSocket.OPEN) socket.close();
-          socket = new WebSocket("ws://localhost:8080"); // Змініть на ваш локальний сервер
+          socket = new WebSocket("ws://localhost:8080");
 
           const sendOffer = async () => {
             try {
