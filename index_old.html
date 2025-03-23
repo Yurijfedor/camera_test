@@ -6,9 +6,8 @@
     <title>Камера (Broadcaster)</title>
   </head>
   <body>
-    <video id="localVideo" autoplay playsinline muted></video>
+    <video id="localVideo" autoplay playsinline></video>
     <textarea id="logOutput" rows="10" cols="50" readonly></textarea>
-    <button onclick="startStream()">Restart Stream</button>
     <script>
       const logs = [];
       const originalConsoleLog = console.log;
@@ -26,21 +25,17 @@
 
       const startStream = async () => {
         try {
-          // Зупиняємо попередній потік, якщо він є
           if (stream) {
             stream.getTracks().forEach((track) => track.stop());
           }
-
-          // Захоплення екрану замість веб-камери
-          stream = await navigator.mediaDevices.getDisplayMedia({
+          stream = await navigator.mediaDevices.getUserMedia({
             video: true,
-            audio: false, // Додайте audio: true, якщо потрібен звук
+            audio: false,
           });
-          console.log("✅ Екран захоплено");
+          console.log("✅ Відео з камери отримано");
           const videoElement = document.getElementById("localVideo");
           videoElement.srcObject = stream;
 
-          // Закриття попереднього з’єднання
           if (peerConnection) peerConnection.close();
           peerConnection = new RTCPeerConnection({
             iceServers: [
@@ -52,16 +47,13 @@
               },
             ],
           });
-
-          // Додаємо треки до WebRTC
           stream
             .getTracks()
             .forEach((track) => peerConnection.addTrack(track, stream));
           console.log("🎥 Треки додані до PeerConnection");
 
-          // Закриваємо попередній WebSocket, якщо відкритий
           if (socket && socket.readyState === WebSocket.OPEN) socket.close();
-          socket = new WebSocket("ws://localhost:8080"); // Змініть на ваш локальний сервер
+          socket = new WebSocket("wss://8325-91-218-88-220.ngrok-free.app");
 
           const sendOffer = async () => {
             try {
@@ -102,10 +94,11 @@
               console.log("📩 Отримано повідомлення:", message);
 
               if (message.restart) {
+                // Нова команда перезапуску
                 console.log("🔄 Отримано команду перезапуску");
                 if (offerInterval) clearInterval(offerInterval);
                 iceCandidateQueue = [];
-                await startStream();
+                await startStream(); // Перезапуск
                 return;
               }
 
@@ -181,7 +174,7 @@
             }
           };
         } catch (error) {
-          console.error("❌ Помилка доступу до екрану або WebRTC:", error);
+          console.error("❌ Помилка доступу до камери або WebRTC:", error);
         }
       };
 
